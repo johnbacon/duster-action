@@ -156,3 +156,113 @@ jobs:
           commit_user_name: GitHub Action
           commit_user_email: actions@github.com
 ```
+
+---
+
+To output in the results of Duster's linting tools in checkstyle format, you can add a `--format=checkstyle` argument.
+
+```yml
+# .github/workflows/duster.yml
+name: Duster
+
+on:
+    push:
+        branches: main
+    pull_request:
+
+jobs:
+  duster:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: "duster"
+        uses: tighten/duster-action@v2
+        with:
+          args: lint --format=checkstyle
+```
+
+---
+
+The result of these checkstyle reports can be used in GitHub Actions and other CI processes with tools like [reviewdog](https://github.com/reviewdog/reviewdog) and [cs2pr](https://github.com/staabm/annotate-pull-request-from-checkstyle).
+
+You may do this either by outputting the results one-by-one and running them through such tools:
+
+```yml
+# .github/workflows/duster.yml
+name: Duster
+
+on:
+    push:
+        branches: main
+    pull_request:
+
+jobs:
+  duster:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: "Install reviewdog"
+        uses: reviewdog/action-setup@v1
+
+      - name: "TLint"
+        uses: tighten/duster-action@v2
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: lint --using=tlint --format=checkstyle | reviewdog -f=checkstyle -name="TLint" -reporter=github-check
+
+      - name: "Pint"
+        uses: tighten/duster-action@v2
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: lint --using=pint --format=checkstyle | reviewdog -f=checkstyle -name="Pint" -reporter=github-check
+```
+
+Or by running them all at once and outputting the results to a file:
+
+```yml
+# .github/workflows/duster.yml
+name: Duster
+
+on:
+    push:
+        branches: main
+    pull_request:
+
+jobs:
+  duster:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: "Install reviewdog"
+        uses: reviewdog/action-setup@v1
+
+      - name: "Duster"
+        id: 'run-duster-lint'
+        uses: tighten/duster-action@v2
+        with:
+          args: lint --using=tlint,phpcs,php-cs-fixer,pint --format=checkstyle >> checkstyle.xml
+
+      - name: Merge checkstyle output
+        if: ${{ failure() && steps.run-duster-lint.conclusion == 'failure' }}
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Merge multiple checkstyle outputs into one, removing:
+          # 1. All XML tags but the first.
+          # 2. All <checkstyle>s except the first opening and last closing tag.
+          # 3. Any line whose first non-whitespace character isn't `<`.
+          grep -P '^\s*<' checkstyle.xml | sed -e '1i <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<checkstyle>' -e '$a </checkstyle>' -e '/<?xml\|<checkstyle\|<\/checkstyle\|^$/d' > checkstyle_filtered.xml
+
+      - name: "Run reviewdog lint reporting"
+        if: ${{ failure() && steps.run-duster-lint.conclusion == 'failure' }}
+        run: |
+          reviewdog -f=checkstyle -name="Duster" -reporter=github-pr-review < checkstyle_filtered.xml
+```
